@@ -1,131 +1,172 @@
-import os
-import time
-import statistics
 import google.generativeai as genai
-from flask import Flask, render_template, request, jsonify
-from werkzeug.utils import secure_filename
+import os
+import sqlite3
+import time
+from flask import Flask, render_template, request, jsonify, session
 from dotenv import load_dotenv
+import wave # for sound to use wav file ratheer mp3
+import numpy as np #for rms
 
-# Load API Key
+# to load api keys
 load_dotenv()
 
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'static/uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
-# Configure Gemini
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    print("❌ WARNING: GEMINI_API_KEY not found in .env")
-
+GEMINI_API_KEY=os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash') 
+model=genai.GenerativeModel('gemini-2.5-flash')
 
+app=Flask(__name__)
+
+app.secret_key="super_secret_key_for_adhd_app"
+#TEMPORAL VOICE RECORDING FOLDER
+UPLOAD_FOLDER= 'static/uploads'
+app.config['UPLOAD_FOLDER']=UPLOAD_FOLDER
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+#THE DATABASE INITIALIZER
+def init_db():
+    conn= sqlite3.connect('adhd_app.db')
+    cursor=conn.cursor()
+    #PARENT TABLE
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cognitive_results(
+            assessment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            person_id INTEGER,
+            variability REAL,
+            memory_score REAL,
+            stroop_score REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)
+    """)
+    
+    #CHILD TABLE
+    cursor.execute("""
+       CREATE TABLE IF NOT EXISTS speech_analysis(
+            audio_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            assessment_id INTEGER,
+            duration REAL,
+            rms REAL,
+            gemini_report TEXT,
+            FOREIGN KEY (assessment_id) REFERENCES cognitive_results(assessment_id))
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()#calling the function so the file is created before any uuser visits
+#---------------------------
+
+#telling the browser what to show if someone visits our site
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/analyze_audio', methods=['POST'])
+#------------
+#when user click record audio
+@app.route('/analyze_audio',methods=['POST'])
 def analyze_audio():
-    if 'audio_data' not in request.files:
-        return jsonify({"analysis": "No audio provided. Speech analysis skipped."}), 200
-    
-    file = request.files['audio_data']
-    filename = secure_filename(f"user_recording_{int(time.time())}.wav")
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
+    conn = sqlite3.connect('adhd_app.db')
+    cursor=conn.cursor()
+    cursor.execute("INSERT INTO cognitive_results (person_id) VALUES (?)",(1,)) #WE NEED TO INTIALLY ATLEAST INSERT ONE ROW THAT ISN'T ID
+    assessment_id=cursor.lastrowid
+    session['current_assessment_id']=assessment_id #Because session is stored in the user's browser (as an encrypted cookie), it acts like a bridge.
+    conn.commit()
+    conn.close()
 
-    print("Analyzing audio pattern...")
+    #handling the audio file
+
+    #get file through request
+    audio_file=request.files['audio_data']
+    filename=f"rec_{int(time.time())}.wav"
+    filepath=os.path.join(app.config['UPLOAD_FOLDER'],filename)
+    audio_file.save(filepath)
+    #calculate the duration
+    with wave.open(filepath,'rb') as wf:
+        frames=wf.getnframes() #total number of frames
+        rate=wf.getframerate()#frame peersecond
+        duration=frames/float(rate)
     
+    #calculate rms(root mean square)
+    with wave.open(filepath,'rb') as wf:
+        raw_data=wf.readframes(wf.getnframes())#read all frames as bytes
+        audio_samples=np.frombuffer(raw_data, dtype=np.int16)#conver bytes into list of numbers
+    
+    rms=np.sqrt(np.mean(audio_samples**2))
+    normalized_rms=rms/32768.0 #raw rms can be huge so by 32768 to get a decimal between 0 and 1
+    
+    
+    conn=sqlite3.connect('adhd_app.db')
+    cursor=conn.cursor()
+    query1="INSERT INTO speech_analysis (assessment_id, duration, rms ,gemini_report) VALUES (?,?,?,?)"
+    cursor.execute(query1,(assessment_id,duration,normalized_rms,"Processing..."))
+    
+    conn.commit()#update later not insert cuase it's easier and maintain data integrity
+    conn.close() # we are not inserting at the end since if the server crashes so we are not left with nothing so we do save the data we get step by step
+    
+    # getting the clinical report from gemini
     try:
-        audio_file = genai.upload_file(path=filepath)
-        
-        # --- NEW HIGH-PRECISION PROMPT ---
-        prompt = """
-        You are a clinical assistant analyzing a patient's speech for ADHD markers.
-        The user was asked: "How do you plan your day?"
-        
-        Analyze the audio for:
-        1. **Tangentiality:** Did they stay on topic or wander into unrelated stories?
-        2. **Pacing:** Is the speech rapid, cluttered, or full of long pauses?
-        3. **Fillers:** Are there excessive "um", "ah", "like" (hesitancy)?
-
-        OUTPUT:
-        Provide a 2-sentence observation. Do NOT include an intro.
-        Example: "Subject displayed rapid pacing with frequent topic changes, failing to answer the prompt directly. Excessive use of filler words suggests processing delay."
+        #upload the file to google's servers
+        audio_data_file=genai.upload_file(path=filepath)#filepath is the path to the .wav file
+    
+        prompt="""
+           You are a clinical assistant. Analyze this audio for ADHD markers:
+           1. Tangentiality: Did they stay on topic?
+           2. Pacing: Is the speech cluttered or has long pauses?
+           3. Fillers: Excessive 'ums' or 'ahs'?
+           Provide a 2-sentence clinical observation.
         """
-        
-        result = model.generate_content([prompt, audio_file])
-        analysis_text = result.text
-        
-        # Cleanup
-        audio_file.delete()
-        os.remove(filepath)
-        
-        return jsonify({"analysis": analysis_text})
-        
+    
+        # Geneate the response
+        result=model.generate_content([prompt,audio_data_file])
+        analysis_text=result.text
+    
+        #Updating the database
+        conn=sqlite3.connect('adhd_app.db')
+        cursor=conn.cursor()
+        query2="UPDATE speech_analysis SET gemini_report = ? WHERE assessment_id = ?"
+        cursor.execute(query2,(analysis_text,assessment_id))
+    
+        conn.commit()
+        conn.close()
+    
+        #Cleanup: Delete from Gemini's Cloud
+        audio_data_file.delete()
     except Exception as e:
-        print(f"Error in audio analysis: {e}")
-        return jsonify({"analysis": "Audio processing error. Pattern could not be determined."}), 200
+        print(f"Gemini Error: {e}")
+        return jsonify({"error": "AI Analysis failed"}), 500
 
+#-----------------------
+
+#Final report
 @app.route('/final_report', methods=['POST'])
 def final_report():
-    data = request.json
+    assessment_id=session.get('current_assessment_id')
+    if not assessment_id:
+        return jsonify({"error":"No active session found. Please start over."}), 400
     
-    # 1. Process Data
-    rt = data.get('reactionTimes', [])
-    variability = statistics.stdev(rt) if len(rt) > 1 else 0
-    memory_score = data.get('memoryScore', 0)
-    stroop_score = data.get('stroopScore', 0)
-    time_diff = data.get('timeDiff', 0) # Can be negative or positive
-    speech_analysis = data.get('audioAnalysis', 'No speech data.')
+    #recieve puzzle data from frontend
+    data=request.json
+    rt_list=data.get('reactionTimes',[])
+    memory_score=data.get('memoryScore',0)
+    stroop_score=data.get('stroopScore',0)
 
-    # 2. Prepare Scores for Chart
-    scores = {
-        "variability": variability,
-        "memory": memory_score,
-        "stroop": stroop_score,
-        "time_diff": time_diff
-    }
-
-    # 3. Contextualize Logic (Prevent Hallucination)
-    # We define the status HERE so the AI is forced to agree with the math.
-    var_status = "High Variability (Attention Lapses)" if variability > 150 else "Stable"
-    mem_status = "Below Average" if memory_score < 4 else "Intact"
-    time_status = "Significant Dyschronometria" if abs(time_diff) > 2.0 else "Accurate"
+    if len(rt_list) >1:
+        rt_array=np.array(rt_list)
+        variability=np.std(rt_array,ddof=1)#byfeault uses poulation std , but for small data sample std is better which stastistics library uses,so ddof=1
+    else:
+        variability=0.0
     
-    # --- NEW REPORT GENERATION PROMPT ---
-    prompt = f"""
-    Generate a serious Cognitive Screening Report based on these EXACT metrics.
-    **CRITICAL:** Do NOT say "I cannot see the graph". Refer to the "Chart Above".
-    There is a radar chart with 4 axes: Attention Stability, Working Memory, Impulse Control, Time Perception,so the user can see a chart on screen. 
-    **PATIENT DATA:**
-    1. **Speech Pattern:** "{speech_analysis}"
-    2. **Attention Stability (Motor Test):** {variability:.2f}ms deviation. CLINICAL STATUS: {var_status}.
-    3. **Working Memory:** Level {memory_score}. CLINICAL STATUS: {mem_status}.
-    4. **Impulse Control (Stroop):** {stroop_score}% Accuracy.
-    5. **Time Perception:** Deviation of {time_diff:.2f} seconds. CLINICAL STATUS: {time_status}.
-
-    **WRITING INSTRUCTIONS:**
-    - **Executive Summary:** Synthesize the 5 points. If {var_status} is "High" OR {time_status} is "Significant", mention that the profile shows executive function challenges.
-    - **Visual Analysis:** Reference the user's chart. (e.g., "As shown in the graph, the 'Time Perception' axis shows a significant drop...")
-    - **Speech:** Incorporate the speech analysis provided above. explain what it means.
-    - **Conclusion:** If markers are off, recommend a professional evaluation. Use a supportive, objective tone.
-
-    **FORMAT:**
-    - Use Markdown.
-    - NO introductory fluff ("Here is your report"). Start with "## Executive Summary".
-    """
-    
+    #UDATING THE COGNITIVE RESULTS
     try:
-        response = model.generate_content(prompt)
-        return jsonify({
-            "markdown_report": response.text,
-            "scores": scores
-        })
-    except Exception as e:
-        print(f"Error generating report: {e}")
-        return jsonify({"error": "Report generation failed"}), 500
+        conn=sqlite3.connect('adhd_app.db')
+        cursor=conn.cursor()
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+        query3="UPDATE cognitive_results SET variability = ?,memory_score = ?,stroop_score = ? WHERE assessment_id = ?"
+        cursor.execute(query3,(variability,memory_score,stroop_score,assessment_id))
+        conn.commit()
+        conn.close()
+
+        #to clear the session
+        session.pop('current_assessment_id',None)
+
+    except Exception as e:
+        print(f"Databse Eroor: {e}")
+        return jsonify({"error":"Could not save final score"}), 500 
