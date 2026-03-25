@@ -35,3 +35,9 @@ ________________________________________
 [ ] Charts: Use Chart.js to visualize focus consistency (Variability).
 ________________________________________
 ________________________________________
+
+25 March'26
+Problem:
+chrome is not returing a wav file 
+solution for now 
+to download pydub and ffmeg
