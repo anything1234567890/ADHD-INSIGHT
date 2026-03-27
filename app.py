@@ -1,6 +1,7 @@
 import google.generativeai as genai
 import os
 import sqlite3
+from pydub import AudioSegment # to tansalte the file sent by browser
 import time
 from flask import Flask, render_template, request, jsonify, session
 from dotenv import load_dotenv
@@ -9,6 +10,13 @@ import numpy as np #for rms
 
 # to load api keys
 load_dotenv()
+# Temporary test to see if pydub can find ffmpeg
+try:
+    # This creates a 1-second silent "test" sound
+    test_sound = AudioSegment.silent(duration=1000)
+    print("Pydub and FFmpeg are shaking hands successfully!")
+except Exception as e:
+    print(f"Bridge Error: {e}")
 
 GEMINI_API_KEY=os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
@@ -75,32 +83,58 @@ def analyze_audio():
 
     #get file through request
     audio_file=request.files['audio_data']
-    filename=f"rec_{int(time.time())}.wav"
-    filepath=os.path.join(app.config['UPLOAD_FOLDER'],filename)
-    audio_file.save(filepath)
+    raw_filename = f"raw_{int(time.time())}.webm"
+    raw_filepath = os.path.join(app.config['UPLOAD_FOLDER'], raw_filename)
+    audio_file.save(raw_filepath)
+    filename = f"rec_{int(time.time())}.wav"
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    try:
+        #translating into .wav 
+        audio_segment=AudioSegment.from_file(raw_filepath,format="webm")
+        if audio_segment.rms==0:
+            print("!!! Warning: RMS is 0.Attempting alternate decode... ")
+            audio_segment=AudioSegment.from_file(raw_filepath)
+
+        audio_segment.export(filepath,format="wav")#exporting to hard drive, first path and then format
+    #now changing the rms and duration calculation since pydub had built in feature for that so math is not necessary, can use it but necessary to open wave file
     #calculate the duration
-    with wave.open(filepath,'rb') as wf:
-        frames=wf.getnframes() #total number of frames
-        rate=wf.getframerate()#frame peersecond
-        duration=frames/float(rate)
+    #with wave.open(filepath,'rb') as wf:
+    #    frames=wf.getnframes() #total number of frames
+    #    rate=wf.getframerate()#frame peersecond
+    #    duration=frames/float(rate)
     
     #calculate rms(root mean square)
-    with wave.open(filepath,'rb') as wf:
-        raw_data=wf.readframes(wf.getnframes())#read all frames as bytes
-        audio_samples=np.frombuffer(raw_data, dtype=np.int16)#conver bytes into list of numbers
+    #with wave.open(filepath,'rb') as wf:
+    #    raw_data=wf.readframes(wf.getnframes())#read all frames as bytes
+    #    audio_samples=np.frombuffer(raw_data, dtype=np.int16)#conver bytes into list of numbers
     
-    rms=np.sqrt(np.mean(audio_samples**2))
-    normalized_rms=rms/32768.0 #raw rms can be huge so by 32768 to get a decimal between 0 and 1
-    
-    
-    conn=sqlite3.connect('adhd_app.db')
-    cursor=conn.cursor()
-    query1="INSERT INTO speech_analysis (assessment_id, duration, rms ,gemini_report) VALUES (?,?,?,?)"
-    cursor.execute(query1,(assessment_id,duration,normalized_rms,"Processing..."))
-    
-    conn.commit()#update later not insert cuase it's easier and maintain data integrity
-    conn.close() # we are not inserting at the end since if the server crashes so we are not left with nothing so we do save the data we get step by step
-    
+    #rms=np.sqrt(np.mean(audio_samples**2))
+    #normalized_rms=rms/32768.0 #raw rms can be huge so by 32768 to get a decimal between 0 and 1
+    #------------------------------
+
+        #calculting the duration
+        duration=audio_segment.duration_seconds
+        #calculating the rms
+        rms=audio_segment.rms
+        normalized_rms=rms/32768.0
+        #printing the data to terminal;l
+        print(f"--- AUDIO DEBUG ---")
+        print(f"File: {filename}")
+        print(f"Duration: {duration:.2f} seconds")
+        print(f"Volume (RMS): {rms}")
+        print(f"Normalized Vol: {normalized_rms:.4f}")
+        print(f"-------------------")
+        
+        conn=sqlite3.connect('adhd_app.db')
+        cursor=conn.cursor()
+        query1="INSERT INTO speech_analysis (assessment_id, duration, rms ,gemini_report) VALUES (?,?,?,?)"
+        cursor.execute(query1,(assessment_id,duration,normalized_rms,"Processing..."))
+        
+        conn.commit()#update later not insert cuase it's easier and maintain data integrity
+        conn.close() # we are not inserting at the end since if the server crashes so we are not left with nothing so we do save the data we get step by step
+    except Exception as e:
+        print(f"Pydub Conveersion Error:{e}")
+        return jsonify({"error":"Audi conversion failed"}), 500
     # getting the clinical report from gemini
     try:
         #upload the file to google's servers
@@ -120,15 +154,18 @@ def analyze_audio():
     
         #Updating the database
         conn=sqlite3.connect('adhd_app.db')
-        cursor=conn.cursor()
-        query2="UPDATE speech_analysis SET gemini_report = ? WHERE assessment_id = ?"
-        cursor.execute(query2,(analysis_text,assessment_id))
+        try:
+           cursor=conn.cursor()
+           query2="UPDATE speech_analysis SET gemini_report = ? WHERE assessment_id = ?"
+           cursor.execute(query2,(analysis_text,assessment_id))
     
-        conn.commit()
-        conn.close()
+           conn.commit()
+        finally:
+           conn.close()
     
         #Cleanup: Delete from Gemini's Cloud
         audio_data_file.delete()
+        return jsonify({"status": "success", "assessment_id": assessment_id})
     except Exception as e:
         print(f"Gemini Error: {e}")
         return jsonify({"error": "AI Analysis failed"}), 500
@@ -166,7 +203,11 @@ def final_report():
 
         #to clear the session
         session.pop('current_assessment_id',None)
+        return jsonify({"status": "success", "message": "Final report generated"})
 
     except Exception as e:
         print(f"Databse Eroor: {e}")
         return jsonify({"error":"Could not save final score"}), 500 
+    
+if __name__ == '__main__':
+    app.run(debug=True)
