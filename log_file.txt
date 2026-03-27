@@ -40,4 +40,28 @@ ________________________________________
 Problem:
 chrome is not returing a wav file 
 solution for now 
-to download pydub and ffmeg
+to download pydub and ffmeg (have to chanegt the backend logic)
+________________________________________
+________________________________________
+27 March'26
+
+1. The Blockers
+
+Silence (RMS 0): Browser cut the stream before data was fully saved.
+MIME Error: Labeling WebM as .wav corrupted the headers.
+File Lock: PermissionError when trying to overwrite files while they were still in use by Windows.
+________________________________________
+
+2. The Solutions
+
+JS Sync: Added mediaRecorder.requestData() in main.js to flush the buffer.
+Mono Fix: Forced channelCount: 1 in browser settings for a cleaner signal.
+Dual-Path Save: Saved raw .webm first, then exported to a new .wav path in app.py.
+________________________________________
+3. Current Status: SUCCESS ✅
+RMS: ~2700 (Audio is finally capturing).
+Gemini: Successfully identifying speech pacing and "uh" fillers.
+Database: Reports are saving correctly in the speech_analysis table.
+________________________________________
+4. Next Step
+Fetch & Display: Create a route to pull the gemini_report from the DB and show it in the UI.
