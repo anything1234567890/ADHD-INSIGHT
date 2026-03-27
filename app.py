@@ -79,6 +79,20 @@ def schema_update():
         conn.commit()
         conn.close()
 schema_update()
+# --- HELPER FUNCTIONS (Place these above your routes) ---
+
+def get_filler_count(input_string):
+    # This function doesn't care what the variable was named outside
+    # It just takes whatever string you give it and calls it 'input_string'
+    fillers = ["um", "uh", "err", "ah", "like"]
+    words = input_string.lower().split()
+    
+    count = 0
+    for word in words:
+        clean_word = word.strip(".,!?")
+        if clean_word in fillers:
+            count += 1
+    return count
 
 #telling the browser what to show if someone visits our site
 @app.route('/')
@@ -148,21 +162,25 @@ def analyze_audio():
             with sr.AudioFile(filepath) as source:
                 audio_data = r.record(source)
                 text=r.recognize_google(audio_data)
+                filler_count = get_filler_count(text)
                 words=text.split()
                 word_count=len(words)
         except sr.UnknownValueError:
             #This happens if the audio is silent or just noise
             text="[No speech detected]"
             word_count=0
+            filler_count=0
         except sr.RequestError:
             #if the internet is down for google api
             text="[Transcription service unavailable]"
             word_count=0
+            filler_count=0
         
         wpm=(word_count/duration)*60 if duration > 0 else 0
         print(f"Transcript:{text}")
         print(f"Word Count:{word_count}")
         print(f"Calculated WPM: {wpm}")
+        print(f"Fillers found: {filler_count}")
         #to calculate silence ratio
         silences=detect_silence(audio_segment,min_silence_len=500,silence_thresh=-40)
         total_silence_ms =0
@@ -172,8 +190,8 @@ def analyze_audio():
         silence_ratio=total_silence_ms/total_duration_ms if total_duration_ms>0 else 0
         conn=sqlite3.connect('adhd_app.db')
         cursor=conn.cursor()
-        query1="INSERT INTO speech_analysis (assessment_id, duration, rms ,wpm, transcript, silence_ratio, gemini_report) VALUES (?,?,?,?,?,?,?)"
-        cursor.execute(query1,(assessment_id,duration,normalized_rms,wpm,text,silence_ratio,"Processing..."))        
+        query1="INSERT INTO speech_analysis (assessment_id, duration, rms ,wpm, transcript, silence_ratio, filler_count, gemini_report) VALUES (?,?,?,?,?,?,?,?)"
+        cursor.execute(query1,(assessment_id,duration,normalized_rms,wpm,text,silence_ratio,filler_count,"Processing..."))        
         conn.commit()#update later not insert cuase it's easier and maintain data integrity
         conn.close() # we are not inserting at the end since if the server crashes so we are not left with nothing so we do save the data we get step by step
     except Exception as e:
