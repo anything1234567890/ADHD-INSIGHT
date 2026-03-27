@@ -1,7 +1,9 @@
 import google.generativeai as genai
 import os
 import sqlite3
+import speech_recognition as sr
 from pydub import AudioSegment # to tansalte the file sent by browser
+from pydub.silence import detect_silence
 import time
 from flask import Flask, render_template, request, jsonify, session
 from dotenv import load_dotenv
@@ -61,6 +63,22 @@ def init_db():
 
 init_db()#calling the function so the file is created before any uuser visits
 #---------------------------
+def schema_update():
+    #Schema update 
+    conn=sqlite3.connect('adhd_app.db')
+    cursor=conn.cursor()
+    
+    try:
+        cursor.execute("ALTER TABlE speech_analysis ADD COLUMN wpm REAL")
+        cursor.execute("ALTER TABLE speech_analysis ADD COLUMN transcript TEXT")
+        cursor.execute("ALTER TABLE speech_analysis ADD COLUMN silence_ratio REAL")
+        print("Database Updated successfully!")
+    except sqlite3.OperationalError:
+        print("Columns might already exist.")
+    
+        conn.commit()
+        conn.close()
+schema_update()
 
 #telling the browser what to show if someone visits our site
 @app.route('/')
@@ -124,12 +142,38 @@ def analyze_audio():
         print(f"Volume (RMS): {rms}")
         print(f"Normalized Vol: {normalized_rms:.4f}")
         print(f"-------------------")
+        #to calculate word per minute
+        r=sr.Recognizer()
+        try:
+            with sr.AudioFile(filepath) as source:
+                audio_data = r.record(source)
+                text=r.recognize_google(audio_data)
+                words=text.split()
+                word_count=len(words)
+        except sr.UnknownValueError:
+            #This happens if the audio is silent or just noise
+            text="[No speech detected]"
+            word_count=0
+        except sr.RequestError:
+            #if the internet is down for google api
+            text="[Transcription service unavailable]"
+            word_count=0
         
+        wpm=(word_count/duration)*60 if duration > 0 else 0
+        print(f"Transcript:{text}")
+        print(f"Word Count:{word_count}")
+        print(f"Calculated WPM: {wpm}")
+        #to calculate silence ratio
+        silences=detect_silence(audio_segment,min_silence_len=500,silence_thresh=-40)
+        total_silence_ms =0
+        for start,end in silences:
+            total_silence_ms+=(end-start)
+        total_duration_ms=len(audio_segment)#auto give in ms , no conversion nedded like duration but can use duration if want
+        silence_ratio=total_silence_ms/total_duration_ms if total_duration_ms>0 else 0
         conn=sqlite3.connect('adhd_app.db')
         cursor=conn.cursor()
-        query1="INSERT INTO speech_analysis (assessment_id, duration, rms ,gemini_report) VALUES (?,?,?,?)"
-        cursor.execute(query1,(assessment_id,duration,normalized_rms,"Processing..."))
-        
+        query1="INSERT INTO speech_analysis (assessment_id, duration, rms ,wpm, transcript, silence_ratio, gemini_report) VALUES (?,?,?,?,?,?,?)"
+        cursor.execute(query1,(assessment_id,duration,normalized_rms,wpm,text,silence_ratio,"Processing..."))        
         conn.commit()#update later not insert cuase it's easier and maintain data integrity
         conn.close() # we are not inserting at the end since if the server crashes so we are not left with nothing so we do save the data we get step by step
     except Exception as e:
