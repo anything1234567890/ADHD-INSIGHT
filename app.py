@@ -68,18 +68,28 @@ def schema_update():
     conn=sqlite3.connect('adhd_app.db')
     cursor=conn.cursor()
     
-    try:
-        cursor.execute("ALTER TABlE speech_analysis ADD COLUMN wpm REAL")
-        cursor.execute("ALTER TABLE speech_analysis ADD COLUMN transcript TEXT")
-        cursor.execute("ALTER TABLE speech_analysis ADD COLUMN silence_ratio REAL")
-        print("Database Updated successfully!")
-    except sqlite3.OperationalError:
-        print("Columns might already exist.")
+    cursor.execute("PRAGMA table_info(speech_analysis)")
+    existing_columns=[info[1] for info in cursor.fetchall()]
+
+    required_columns={
+        "wpm" : "REAL",
+        "transcript": "TEXT",
+        "silence_ratio" : "REAL",
+        "filler_count" : "INTEGER",
+        "speech_risk_score" : "REAL"
+
+    }
+    for col_name, col_type in required_columns.items():
+        if col_name not in existing_columns:
+            cursor.execute(f"ALTER TABLE speech_analysis ADD COLUMN {col_name} {col_type}")
+            print(f"Successfully added {col_name}")
+        else:
+            print(f"Column {col_name} already present.")
     
-        conn.commit()
-        conn.close()
+    conn.commit()
+    conn.close()
 schema_update()
-# --- HELPER FUNCTIONS (Place these above your routes) ---
+# --- HELPER FUNCTIONS ---
 
 def get_filler_count(input_string):
     # This function doesn't care what the variable was named outside
@@ -93,6 +103,24 @@ def get_filler_count(input_string):
         if clean_word in fillers:
             count += 1
     return count
+
+#helper function to normalize different speech element
+def calculate_speech_risk(wpm, silence_ratio,filler_count,normalized_rms):
+    risk=0.0
+    #packing risk
+    if wpm>180 or wpm<70:
+        risk+=0.4
+    #Silence/Hesitation Risk 
+    if silence_ratio>0.30:
+        risk+=0.2
+    #Clutter/Filler Risk
+    if filler_count>3:
+        risk+=0.2
+    #Vocal Energy/Regulation Risk
+    if normalized_rms>0.25 or normalized_rms<0.01:
+        risk+=0.2
+    return min(risk,1.0)
+
 
 #telling the browser what to show if someone visits our site
 @app.route('/')
@@ -188,10 +216,13 @@ def analyze_audio():
             total_silence_ms+=(end-start)
         total_duration_ms=len(audio_segment)#auto give in ms , no conversion nedded like duration but can use duration if want
         silence_ratio=total_silence_ms/total_duration_ms if total_duration_ms>0 else 0
+        
+        #Calling the helper speech_risk_score fn()
+        speech_risk_score=calculate_speech_risk(wpm,silence_ratio,filler_count,normalized_rms)
         conn=sqlite3.connect('adhd_app.db')
         cursor=conn.cursor()
-        query1="INSERT INTO speech_analysis (assessment_id, duration, rms ,wpm, transcript, silence_ratio, filler_count, gemini_report) VALUES (?,?,?,?,?,?,?,?)"
-        cursor.execute(query1,(assessment_id,duration,normalized_rms,wpm,text,silence_ratio,filler_count,"Processing..."))        
+        query1="INSERT INTO speech_analysis (assessment_id, duration, rms ,wpm, transcript, silence_ratio, filler_count, speech_risk_score, gemini_report) VALUES (?,?,?,?,?,?,?,?,?)"
+        cursor.execute(query1,(assessment_id,duration,normalized_rms,wpm,text,silence_ratio,filler_count,speech_risk_score,"Processing..."))        
         conn.commit()#update later not insert cuase it's easier and maintain data integrity
         conn.close() # we are not inserting at the end since if the server crashes so we are not left with nothing so we do save the data we get step by step
     except Exception as e:
@@ -202,12 +233,18 @@ def analyze_audio():
         #upload the file to google's servers
         audio_data_file=genai.upload_file(path=filepath)#filepath is the path to the .wav file
     
-        prompt="""
-           You are a clinical assistant. Analyze this audio for ADHD markers:
-           1. Tangentiality: Did they stay on topic?
-           2. Pacing: Is the speech cluttered or has long pauses?
-           3. Fillers: Excessive 'ums' or 'ahs'?
-           Provide a 2-sentence clinical observation.
+        prompt = f"""
+            You are a clinical AI assistant. Analyze this audio for ADHD markers.
+            The system extracted these objective metrics:
+            - Speech Rate: {wpm:.1f} WPM (Words Per Minute)
+            - Disfluency: {filler_count} filler words (ums/ahs/likes)
+            - Silence Ratio: {silence_ratio*100:.1f}% of the recording
+            - Volume Energy: {normalized_rms:.4f} (normalized RMS)
+
+            Task: 
+            1. Correlate the audio recording with these numbers.
+            2. Provide a 2-sentence clinical observation. 
+            Does the pacing feel 'pressured' (ADHD-Hyperactive) or 'hesitant' (ADHD-Inattentive)?
         """
     
         # Geneate the response
@@ -248,8 +285,9 @@ def final_report():
     stroop_score=data.get('stroopScore',0)
 
     if len(rt_list) >1:
-        rt_array=np.array(rt_list)
+        rt_array=np.array(rt_list,dtype=float)
         variability=np.std(rt_array,ddof=1)#byfeault uses poulation std , but for small data sample std is better which stastistics library uses,so ddof=1
+        variability=float(variability)
     else:
         variability=0.0
     
