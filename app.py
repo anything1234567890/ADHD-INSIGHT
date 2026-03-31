@@ -5,7 +5,7 @@ import speech_recognition as sr
 from pydub import AudioSegment # to tansalte the file sent by browser
 from pydub.silence import detect_silence
 import time
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, redirect
 from dotenv import load_dotenv
 import wave # for sound to use wav file ratheer mp3
 import numpy as np #for rms
@@ -57,6 +57,17 @@ def init_db():
             rms REAL,
             gemini_report TEXT,
             FOREIGN KEY (assessment_id) REFERENCES cognitive_results(assessment_id))
+    """)
+
+    #FINAL RESULT TABLE
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS final_reports(
+            assessment_id INTEGER PRIMARY KEY,
+            full_summary TEXT,
+            risk_level TEXT,
+            generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (assessment_id) REFERENCES cognitive_results(assessment_id)
+        )
     """)
     conn.commit()
     conn.close()
@@ -269,6 +280,7 @@ def analyze_audio():
         print(f"Gemini Error: {e}")
         return jsonify({"error": "AI Analysis failed"}), 500
 
+
 #-----------------------
 
 #Final report
@@ -309,5 +321,74 @@ def final_report():
         print(f"Databse Eroor: {e}")
         return jsonify({"error":"Could not save final score"}), 500 
     
+
+#to give the data to frontend
+@app.route('/get_results/<int:assessment_id>',methods=['GET'])
+def get_results(assessment_id):
+    conn=None
+    try:
+        conn=sqlite3.connect('adhd_app.db')
+        conn.row_factory=sqlite3.Row
+        cursor=conn.cursor()        
+        query="""
+           SELECT
+           c.variability, c.memory_score, c.stroop_score, s.duration,s.wpm,s.transcript,s.silence_ratio,
+           s.filler_count,s.speech_risk_score,s.gemini_report,f.full_summary
+           FROM cognitive_results c
+           JOIN speech_analysis s ON c.assessment_id=s.assessment_id
+           LEFT JOIN final_reports f ON c.assessment_id=f.assessment_id
+           WHERE c.assessment_id=? 
+            
+        """
+        cursor.execute(query,(assessment_id,))
+        row=cursor.fetchone()
+
+        if not row:
+            return jsonify({"status":"error","message":"Asessment not found"}), 404
+        result_data=dict(row)
+        if result_data.get('full_summary'):
+            print(f"---Cache Hit: Using saved report for ID {assessment_id} ---")
+            final_clinical_report=result_data['full_summary']
+        else:
+            print(f"---Cache Miss: Generating new report for ID {assessment_id} ---")
+            clinical_prompt = f"""
+            Analyze the following cognitive and speech metrics for a potential ADHD screening:
+            
+            COGNITIVE DATA:
+            - Reaction Time Variability: {result_data['variability']:.2f}ms (High variability can indicate inattention)
+            - Stroop Task Accuracy: {result_data['stroop_score']}% (Measures executive function/inhibition)
+            - Memory Task Score: {result_data['memory_score']}%
+            
+            SPEECH DATA:
+            - Speech Rate: {result_data['wpm']:.1f} WPM
+            - Fillers: {result_data['filler_count']} (ums, ahs, likes)
+            - Silence Ratio: {result_data['silence_ratio']*100:.1f}%
+            - Previous Voice Observation: {result_data['gemini_report']}
+            
+            TASK: 
+            Provide a 3-sentence 'Clinical Summary'. 
+            - Sentence 1: Comment on the correlation between the cognitive scores and the speech patterns.
+            - Sentence 2: Identify if the profile leans toward 'Hyperactive/Impulsive' (fast speech, low inhibition) or 'Inattentive' (high variability, high silences).
+            - Sentence 3: Include a disclaimer that this is a screening tool, not a formal diagnosis.
+            """
+            full_analysis=model.generate_content(clinical_prompt)
+            final_clinical_report=full_analysis.text
+            # to SAVE the data in the table
+            cursor.execute("INSERT INTO final_reports (assessment_id,full_summary) VALUES (?,?)",(assessment_id,final_clinical_report))
+            conn.commit()
+        result_data['final_clinical_summary']=final_clinical_report
+        return jsonify({"status":"success","data":result_data})
+
+    except Exception as e:
+        print(f"Database Retrieval Eroor: {e}")
+        return jsonify({"status":"error","message":str(e)}), 500
+    finally:
+            conn.close()
+
+@app.route('/start_new_test')
+def start_new_test():
+    session.pop('current_assessment_id', None) # Wipe everything
+    return redirect('/') # Send them to the start
+
 if __name__ == '__main__':
     app.run(debug=True)
