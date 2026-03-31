@@ -3,113 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NeuroFocus AI | Cognitive Battery</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <title>ADHD Cognitive Assessment</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-
-    <div class="background-orb orb-1"></div>
-    <div class="background-orb orb-2"></div>
-
     <div class="glass-container">
         <header>
-            <h1>NeuroFocus <span class="highlight">AI</span></h1>
-            <p>ADHD Biomarker Screening</p>
+            <h1>Cognitive Analysis Portal</h1>
+            <div id="progress-bar"><div id="progress-fill"></div></div>
         </header>
 
-        <section id="step-0" class="step active">
-            <div class="card-content">
-                <h2>The Protocol</h2>
-                <p>We will analyze 5 key cognitive markers. Please minimize distractions.</p>
-                <button class="btn-primary" onclick="goToStep(1)">Initialize System</button>
+        <main id="game-container">
+            <div id="start-screen">
+                <p>Welcome. This assessment consists of 3 cognitive puzzles and 1 voice analysis task.</p>
+                <button onclick="nextPhase()" class="btn-primary">Start Assessment</button>
             </div>
-        </section>
+        </main>
 
-        <section id="step-1" class="step">
-            <div class="card-content">
-                <h2>Phase 1: Verbal Pattern</h2>
-                <p class="instruction">Tap 'Record' and tell us: <strong>"How do you plan your day?"</strong> (Speak for ~20s).</p>
-                <div class="visualizer-box">
-                    <div id="wave" class="wave hidden"><span></span><span></span><span></span><span></span><span></span></div>
-                </div>
-                <button id="record-btn" class="btn-primary">Start Recording</button>
-                <p id="audio-status" class="status-text"></p>
-            </div>
-        </section>
-
-        <section id="step-2" class="step">
-            <div class="card-content">
-                <h2>Phase 2: Motor Variability</h2>
-                <p class="instruction">Click the box as soon as it turns <strong>GREEN</strong>.</p>
-                <div id="reaction-start-overlay">
-                    <button class="btn-primary" onclick="initReactionTest()">Start Motor Test</button>
-                </div>
-                <div id="reaction-area" class="reaction-box hidden">Wait for Green...</div>
-                <p id="reaction-counter">Round: 0/5</p>
-            </div>
-        </section>
-
-        <section id="step-3" class="step">
-            <div class="card-content">
-                <h2>Phase 3: Working Memory</h2>
-                <p class="instruction">Memorize the glowing sequence.</p>
-                <button id="memory-start-btn" class="btn-primary" onclick="startMemoryTest()">Start Memory Test</button>
-                <div id="memory-grid" class="memory-grid hidden"></div>
-                <p id="memory-level-display">Level: 0</p>
-            </div>
-        </section>
-
-        <section id="step-4" class="step">
-            <div class="card-content">
-                <h2>Phase 4: Inhibition Control</h2>
-                <p class="instruction">Click the button that matches the <strong>INK COLOR</strong>, not the word.</p>
-                <button id="stroop-start-btn" class="btn-primary" onclick="startStroopTest()">Start Stroop Test</button>
-                
-                <div id="stroop-game" class="hidden">
-                    <div id="stroop-word">WORD</div>
-                    <div class="stroop-options">
-                        <button class="stroop-btn" onclick="handleStroop('red')">Red</button>
-                        <button class="stroop-btn" onclick="handleStroop('blue')">Blue</button>
-                        <button class="stroop-btn" onclick="handleStroop('green')">Green</button>
-                    </div>
-                </div>
-                <p id="stroop-counter">Round: 0/5</p>
-            </div>
-        </section>
-
-        <section id="step-5" class="step">
-            <div class="card-content">
-                <h2>Phase 5: Time Perception</h2>
-                <p class="instruction">Test your internal clock.</p>
-                <p>1. Click <strong>START</strong>.<br>2. Wait for exactly <strong>10 Seconds</strong> (count in your head).<br>3. Click <strong>STOP</strong>.</p>
-                
-                <button id="time-btn" class="btn-primary">START TIMER</button>
-                <p id="time-result" class="status-text"></p>
-            </div>
-        </section>
-
-        <section id="step-6" class="step">
-            <div class="card-content">
-                <h2>Neuro-Cognitive Profile</h2>
-                <div class="loader"></div>
-                
-                <div class="chart-container">
-                    <canvas id="resultsChart"></canvas>
-                </div>
-
-                <div id="final-report" class="markdown-body"></div>
-                <button class="btn-primary" onclick="window.print()" style="margin-top: 20px; background: #334155;">Save PDF</button>
-                
-                <p class="disclaimer">
-                    *Disclaimer: This tool is for educational purposes only and is not a clinical diagnosis. 
-                    Please consult a psychiatrist for professional evaluation.
-                </p>
-            </div>
-        </section>
+        <div id="controls" class="hidden">
+            <button id="next-btn" class="btn-next" onclick="nextPhase()">Continue to Next Task →</button>
+        </div>
     </div>
-    <script src="/static/js/script.js"></script>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>
