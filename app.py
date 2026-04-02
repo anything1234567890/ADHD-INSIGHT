@@ -65,6 +65,7 @@ def init_db():
             assessment_id INTEGER PRIMARY KEY,
             full_summary TEXT,
             risk_level TEXT,
+            score INTEGER,
             generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (assessment_id) REFERENCES cognitive_results(assessment_id)
         )
@@ -131,6 +132,15 @@ def calculate_speech_risk(wpm, silence_ratio,filler_count,normalized_rms):
     if normalized_rms>0.25 or normalized_rms<0.01:
         risk+=0.2
     return min(risk,1.0)
+#final risk score
+def determine_final_risk(variability, stroop, memory, speech_risk):
+    score=0
+    if variability >100:score+=1
+    if stroop<70:score+=1
+    if memory<75:score+=1
+    if speech_risk>0.6:score+=1
+    return score
+
 
 
 #telling the browser what to show if someone visits our site
@@ -373,8 +383,17 @@ def get_results(assessment_id):
             """
             full_analysis=model.generate_content(clinical_prompt)
             final_clinical_report=full_analysis.text
+            #Calling the helper function for final score
+            final_risk_score=determine_final_risk(result_data['variability'], result_data['stroop_score'],result_data['memory_score'],result_data['speech_risk_score'])
+            final_risk=""
+            if final_risk_score>=3:
+                final_risk+="High"
+            elif final_risk_score>=1:
+                final_risk+="Moderate"
+            else:
+                final_risk+="Low"
             # to SAVE the data in the table
-            cursor.execute("INSERT INTO final_reports (assessment_id,full_summary) VALUES (?,?)",(assessment_id,final_clinical_report))
+            cursor.execute("INSERT OR REPLACE INTO final_reports (assessment_id,risk_level,score,full_summary) VALUES (?,?,?,?)",(assessment_id,final_risk,final_risk_score,final_clinical_report))
             conn.commit()
         result_data['final_clinical_summary']=final_clinical_report
         return jsonify({"status":"success","data":result_data})
