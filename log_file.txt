@@ -1,0 +1,67 @@
+23 March'26
+1. The Big Fixes (Today's Hurdles)
+•	Syntax: Fixed the OperationalError by correcting triple-quote string syntax (""").
+•	Session Logic: Solved the "Memory Loss" between pages. Used the Filing Cabinet (session) to carry the assessment_id from the Audio route to the Report route.
+•	Audio Data: Clarified that a 1-second recording is a list of 16,000 integers (snapshots), not one number. Used NumPy to square and average them for RMS (Volume).
+________________________________________
+2. Current Pipeline (Where we are)
+1.	Anchor: User starts audio $\rightarrow$ DB creates assessment_id (The Parent).
+2.	Capture: System saves .wav file $\rightarrow$ Calculates Duration and RMS locally.
+3.	Initial Save: DB inserts these metrics into speech_analysis with a "Processing..." placeholder.
+________________________________________
+3. Tomorrow's Task
+•	[ ] Gemini Integration: Send file to Cloud $\rightarrow$ Get Speech Analysis.
+•	[ ] Final Update: Replace "Processing..." in DB with Gemini’s text.
+•	[ ] Report Sync: Pull the ID from the session to save the final Puzzle scores.
+________________________________________
+________________________________________
+24 March'26
+✅ MilestonesGemini 2.5 Flash: Integrated upload_file & async UPDATE logic for clinical reports.
+Math & ML: Implemented NumPy for Audio RMS and Reaction Time Variability ($ddof=1$).
+Data Flow: Fixed SQL typos and synced Parent-Child table relations.
+Security: Added session.pop to reset the test ID after completion.
+________________________________________
+
+🛠️ Key Fixes
+
+Scoping: Used local assessment_id across multiple DB connections in one route.
+Cleanup: Matched genai upload variable with .delete() to prevent cloud clutter.
+Logic: Implemented if not session check to block "illegal" route access.
+________________________________________
+⏭️ Next Steps
+
+[ ] JS Sync: Verify index.html sends audio_data & JSON results correctly.
+[ ] Results UI: Build /dashboard to display stored markers.
+[ ] Charts: Use Chart.js to visualize focus consistency (Variability).
+________________________________________
+________________________________________
+
+25 March'26
+Problem:
+chrome is not returing a wav file 
+solution for now 
+to download pydub and ffmeg (have to chanegt the backend logic)
+________________________________________
+________________________________________
+27 March'26
+
+1. The Blockers
+
+Silence (RMS 0): Browser cut the stream before data was fully saved.
+MIME Error: Labeling WebM as .wav corrupted the headers.
+File Lock: PermissionError when trying to overwrite files while they were still in use by Windows.
+________________________________________
+
+2. The Solutions
+
+JS Sync: Added mediaRecorder.requestData() in main.js to flush the buffer.
+Mono Fix: Forced channelCount: 1 in browser settings for a cleaner signal.
+Dual-Path Save: Saved raw .webm first, then exported to a new .wav path in app.py.
+________________________________________
+3. Current Status: SUCCESS ✅
+RMS: ~2700 (Audio is finally capturing).
+Gemini: Successfully identifying speech pacing and "uh" fillers.
+Database: Reports are saving correctly in the speech_analysis table.
+________________________________________
+4. Next Step
+Fetch & Display: Create a route to pull the gemini_report from the DB and show it in the UI.
