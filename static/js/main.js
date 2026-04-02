@@ -35,16 +35,33 @@ async function setupFaceAI() {
 //-------------
 let currentPhase = 0;
 let trialCount = 0;
+let distractionFrames=0;
 const MAX_TRIALS = 5; 
 const MEM_TRIALS = 3;
-let results = { reactionTimes: [], memoryScores: [], stroopScore: 0, assessment_id: null };
+let results = { reactionTimes: [], memoryScores: [], stroopScore: 0, assessment_id: null,gazeDistractions: 0};
 
 const phases = ['reaction', 'memory', 'stroop', 'voice', 'report'];
 const container = document.getElementById('game-container');
 const nextBtn = document.getElementById('next-btn');
 const controlDiv = document.getElementById('controls');
 
-function nextPhase() {
+async function nextPhase() {
+    //webcam added logic
+    if (currentPhase === 0) {
+        console.log("🎥 Initializing Camera for the whole session...");
+        video = document.getElementById("webcam");
+        
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            
+            // Start the AI Brain and the Watcher loop
+            await setupFaceAI(); 
+            predictWebcam();
+        } catch (err) {
+            console.error("Camera access denied:", err);
+        }
+    }
     currentPhase++;
     document.getElementById('progress-fill').style.width = (currentPhase / (phases.length - 1)) * 100 + "%";
     controlDiv.classList.add('hidden');
@@ -60,16 +77,6 @@ function showNextButton(text) { nextBtn.innerText = text; controlDiv.classList.r
 
 // --- REACTION (With Penalty) ---
 function startReactionTest() {
-    // --- PIECE 2: START THE WEBCAM ---
-    video = document.getElementById("webcam");
-
-    navigator.mediaDevices.getUserMedia({ video: true }).then(async (stream) => {
-        video.srcObject = stream;
-
-        await setupFaceAI();   // ✅ WAIT for AI
-        predictWebcam();       // ✅ THEN start detection
-    });
-
     // (rest of your reaction code stays SAME)
 
     if (trialCount < MAX_TRIALS) {
@@ -162,7 +169,7 @@ function startVoiceRecording() {
 async function showFinalReport() {
     container.innerHTML = `<h3>Compiling Full Report...</h3>`;
     const avgMemory = results.memoryScores.reduce((a,b)=>a+b, 0) / MEM_TRIALS;
-    await fetch('/final_report', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({...results, memoryScore: avgMemory}) });
+    await fetch('/final_report', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({...results, memoryScore: avgMemory,gazeDistractions: results.gazeDistractions}) });
     const resp = await fetch(`/get_results/${results.assessment_id}`);
     const res = await resp.json(); const d = res.data;
     controlDiv.innerHTML = "";
@@ -198,7 +205,6 @@ async function showFinalReport() {
 // --- PIECE 3: THE WATCHER LOOP ---
 // --- FIX PIECE 3: THE WATCHER LOOP ---
 async function predictWebcam() {
-    // Check if the brain is actually loaded yet
     if (!faceLandmarker) {
         window.requestAnimationFrame(predictWebcam);
         return; 
@@ -206,15 +212,25 @@ async function predictWebcam() {
 
     let startTimeMs = performance.now();
     
-    // We only try to detect if the video is actually playing
     if (video && video.readyState >= 2) {
         const detections = faceLandmarker.detectForVideo(video, startTimeMs);
 
         if (detections.faceLandmarks && detections.faceLandmarks.length > 0) {
             const nose = detections.faceLandmarks[0][4]; 
-            console.log("Nose X Coordinate:", nose.x.toFixed(2));
+            
+            // --- ADD THIS BACK TO SEE THE NUMBERS ---
+            console.log("Nose X:", nose.x.toFixed(2));
+
+            if (nose.x > 0.65 || nose.x < 0.35) {
+                distractionFrames++;
+                if (distractionFrames === 40) {
+                    results.gazeDistractions++;
+                    console.log("⚠️ DISTRACTION LOGGED! Total:", results.gazeDistractions);
+                }
+            } else {
+                distractionFrames = 0;
+            }
         }
     }
-
     window.requestAnimationFrame(predictWebcam);
 }
